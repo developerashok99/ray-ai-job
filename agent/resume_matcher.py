@@ -1,7 +1,6 @@
 import json
 import os
 import re
-import sqlite3
 
 import pdfplumber
 import requests
@@ -255,34 +254,6 @@ def _is_provider_down(e):
     """True for server errors / network failures — retry once then switch."""
     err = str(e).lower()
     return any(kw in err for kw in ["502", "503", "504", "connection", "timeout"])
-
-
-# ── Cache ─────────────────────────────────────────────────────────────────────
-
-def check_score_cache(title, company, days=7):
-    """Return a cached result dict if same title+company scored recently, else None."""
-    try:
-        conn = sqlite3.connect("jobs.db")
-        row = conn.execute("""
-            SELECT relevance_score, match_reason, internship_friendly, experience_required
-            FROM jobs
-            WHERE LOWER(TRIM(title))   = LOWER(TRIM(?))
-              AND LOWER(TRIM(company)) = LOWER(TRIM(?))
-              AND date_scraped >= datetime('now', ? || ' days')
-              AND relevance_score > 0
-            ORDER BY date_scraped DESC LIMIT 1
-        """, (title, company, f"-{days}")).fetchone()
-        conn.close()
-        if row:
-            return {
-                "score": row[0],
-                "reason": f"[cached] {row[1]}",
-                "internship_friendly": bool(row[2]),
-                "experience_required": row[3] or "unknown",
-            }
-    except Exception:
-        pass
-    return None
 
 
 # ── Public API ────────────────────────────────────────────────────────────────

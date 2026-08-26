@@ -1,4 +1,6 @@
 python-jobspy
+pymongo
+dnspython
 beautifulsoup4
 groq
 python-dotenv

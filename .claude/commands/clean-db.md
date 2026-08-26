@@ -9,24 +9,23 @@ Operations available (ask the user which they want if not specified in $ARGUMENT
 Run the appropriate cleanup:
 
 ```python
-import sqlite3, os
+import os
 os.chdir(r"c:\Users\ashok\Desktop\JobPilot_AI")
-conn = sqlite3.connect("jobs.db")
+from storage.database import get_db
+from datetime import datetime, timedelta
+
+db = get_db()
+cutoff_7d = (datetime.now() - timedelta(days=7)).isoformat()
 
 # Always safe: remove score=0
-cur = conn.execute("DELETE FROM jobs WHERE relevance_score = 0")
-zero_deleted = cur.rowcount
+zero_deleted = db.jobs.delete_many({"relevance_score": 0}).deleted_count
 
 # Remove score=1 rejects older than 7 days
-cur = conn.execute("DELETE FROM jobs WHERE relevance_score = 1 AND date_scraped < date('now', '-7 days')")
-old_rejects = cur.rowcount
-
-conn.commit()
+old_rejects = db.jobs.delete_many({"relevance_score": 1, "date_scraped": {"$lt": cutoff_7d}}).deleted_count
 
 # Show what's left
-total = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
-matched = conn.execute("SELECT COUNT(*) FROM jobs WHERE relevance_score >= 7").fetchone()[0]
-conn.close()
+total   = db.jobs.count_documents({})
+matched = db.jobs.count_documents({"relevance_score": {"$gte": 7}})
 
 print(f"Deleted {zero_deleted} score=0 jobs")
 print(f"Deleted {old_rejects} old score=1 rejects (>7 days)")
@@ -34,4 +33,7 @@ print(f"DB now has {total} total jobs, {matched} matches (score>=7)")
 ```
 
 Execute with the Bash tool and report the results. If the user also wants to delete all jobs older than 30 days, confirm first since that's more destructive, then run:
-`DELETE FROM jobs WHERE date_scraped < date('now', '-30 days')`
+```python
+cutoff_30d = (datetime.now() - timedelta(days=30)).isoformat()
+db.jobs.delete_many({"date_scraped": {"$lt": cutoff_30d}})
+```

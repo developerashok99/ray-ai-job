@@ -5,23 +5,20 @@ If the user passes an argument (e.g. `/top-jobs 20`), use that as the limit. Def
 Run this Python snippet:
 
 ```python
-import sqlite3, os
+import os
 os.chdir(r"c:\Users\ashok\Desktop\JobPilot_AI")
+from storage.database import get_db
 LIMIT = $ARGUMENTS if "$ARGUMENTS".strip().isdigit() else 15
-conn = sqlite3.connect("jobs.db")
-conn.row_factory = sqlite3.Row
-rows = conn.execute("""
-    SELECT title, company, location, source, relevance_score, job_url, date_scraped, date_posted
-    FROM jobs
-    WHERE relevance_score >= 7
-    ORDER BY relevance_score DESC, date_scraped DESC
-    LIMIT ?
-""", (int(LIMIT),)).fetchall()
-conn.close()
+db = get_db()
+rows = list(db.jobs.find(
+    {"relevance_score": {"$gte": 7}},
+    {"title": 1, "company": 1, "location": 1, "source": 1, "relevance_score": 1,
+     "job_url": 1, "date_scraped": 1, "date_posted": 1},
+).sort([("relevance_score", -1), ("date_scraped", -1)]).limit(int(LIMIT)))
 
 print(f"\nTop {LIMIT} matched jobs (score >= 7):\n")
 for i, r in enumerate(rows, 1):
-    posted = r['date_posted'][:10] if r['date_posted'] else "unknown"
+    posted = r['date_posted'][:10] if r.get('date_posted') else "unknown"
     print(f"{i:>2}. [{r['relevance_score']}/10] {r['title'][:45]}")
     print(f"      {r['company'][:35]} | {r['location'][:25]} | {r['source']}")
     print(f"      Posted: {posted} | {r['job_url'][:70]}")

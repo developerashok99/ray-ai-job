@@ -16,7 +16,6 @@ Safe to run concurrently with the scheduler (reads/writes different columns).
 """
 import os
 import re
-import sqlite3
 import sys
 import time
 import random
@@ -30,14 +29,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()
 
 from agent.exp_filter import has_experience_requirement, _EXP_FLOOR
+from storage.database import get_jobs_missing_description, update_job_description_and_score
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
-
-DB_PATH = "jobs.db"
 
 
 def _load_config():
@@ -147,18 +145,7 @@ def run_filler(limit: int = 50, rescore: bool = True, dry_run: bool = False):
     config    = _load_config()
     threshold = config["matching"]["relevance_threshold"]
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute("""
-        SELECT job_id, title, company, job_url, source, relevance_score
-        FROM jobs
-        WHERE relevance_score >= 7
-          AND (description IS NULL OR description IN ('', 'nan', 'None'))
-          AND job_url IS NOT NULL AND job_url != ''
-        ORDER BY relevance_score DESC, date_scraped DESC
-        LIMIT ?
-    """, (limit,)).fetchall()
-    conn.close()
+    rows = get_jobs_missing_description(min_score=7, limit=limit)
 
     if not rows:
         print("[DescFiller] No no-description matched jobs found.")
@@ -237,13 +224,7 @@ def run_filler(limit: int = 50, rescore: bool = True, dry_run: bool = False):
         job_id    = row["job_id"]
 
         if not dry_run:
-            conn = sqlite3.connect(DB_PATH)
-            conn.execute(
-                "UPDATE jobs SET description = ?, relevance_score = ?, match_reason = ? WHERE job_id = ?",
-                (desc, new_score, reason, job_id)
-            )
-            conn.commit()
-            conn.close()
+            update_job_description_and_score(job_id, desc, new_score, reason)
 
         if new_score < threshold and old_score >= threshold:
             downgraded += 1

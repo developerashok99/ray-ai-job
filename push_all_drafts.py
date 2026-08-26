@@ -3,31 +3,18 @@ Save Gmail Drafts for all good jobs using the lite personalized template.
 No LLM calls — fast, no token limits. Injects up to 2 finance keywords from job description.
 """
 import os
-import sqlite3
 import sys
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 from agent.email_drafter import draft_email_lite
 from agent.gmail_drafts  import delete_all_drafts, save_all_drafts, _is_valid_email
+from storage.database    import get_jobs_with_hr_email
 
 
 def get_good_jobs(days=7):
-    from datetime import datetime, timedelta
-    cutoff = (datetime.today() - timedelta(days=days)).strftime("%Y-%m-%d")
-    conn = sqlite3.connect("jobs.db")
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        """SELECT * FROM jobs
-           WHERE relevance_score >= 7
-             AND hr_email IS NOT NULL
-             AND hr_email != ''
-             AND (date_posted IS NULL OR date_posted = 'nan' OR date_posted >= ?)
-           ORDER BY relevance_score DESC, date_posted DESC""",
-        (cutoff,)
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows if _is_valid_email(r["hr_email"])]
+    rows = get_jobs_with_hr_email(min_score=7, days=days)
+    return [r for r in rows if _is_valid_email(r["hr_email"])]
 
 
 def main():

@@ -4,31 +4,21 @@ using the new human-style email prompt with resume attached.
 """
 import os
 import sys
-import sqlite3
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 from agent.gmail_drafts import delete_all_drafts, save_all_drafts, _is_valid_email
 from agent.email_drafter import draft_email
 from agent.resume_matcher import load_resume
+from storage.database import get_jobs_with_hr_email
 import yaml
 
 
 def get_5_good_jobs():
     """Pull jobs from DB that have a valid hr_email (no image filenames, no placeholders)."""
-    conn = sqlite3.connect("jobs.db")
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        """SELECT * FROM jobs
-           WHERE relevance_score >= 7
-             AND hr_email IS NOT NULL
-             AND hr_email != ''
-           ORDER BY relevance_score DESC, days_old ASC"""
-    ).fetchall()
-    conn.close()
-
+    rows = get_jobs_with_hr_email(min_score=7)
     good = []
-    for row in [dict(r) for r in rows]:
+    for row in rows:
         if _is_valid_email(row["hr_email"]):
             good.append(row)
         if len(good) >= 5:

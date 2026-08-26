@@ -21,10 +21,13 @@ def run_pipeline():
     from scrapers.foundit         import scrape_foundit
     from scrapers.timesjobs       import scrape_timesjobs
     from scrapers.naukri          import scrape_naukri
-    from agent.resume_matcher import score_jobs_batch, check_score_cache, load_resume, reset_llm_state
+    from agent.resume_matcher import score_jobs_batch, load_resume, reset_llm_state
     from storage.database     import (
-        job_exists, insert_job, get_relevant_jobs, was_recently_notified, mark_notified,
+        init_db, job_exists, insert_job, get_relevant_jobs, get_jobs_by_ids,
+        was_recently_notified, mark_notified, check_score_cache,
     )
+
+    init_db()
     from storage.excel_export import export_to_excel
 
     config    = load_config()
@@ -247,18 +250,9 @@ def run_pipeline():
         print(f"[!] Description filler error: {e}")
 
     # Reload relevant from DB — filler may have downgraded some jobs
-    import sqlite3 as _sq3
-    _conn = _sq3.connect("jobs.db")
-    _conn.row_factory = _sq3.Row
     _rel_ids = [j["job_id"] for j in relevant]
     if _rel_ids:
-        _ph   = ",".join("?" * len(_rel_ids))
-        _rows = _conn.execute(
-            f"SELECT * FROM jobs WHERE job_id IN ({_ph}) AND relevance_score >= ?",
-            _rel_ids + [threshold]
-        ).fetchall()
-        relevant = [dict(r) for r in _rows]
-    _conn.close()
+        relevant = get_jobs_by_ids(_rel_ids, min_score=threshold)
     _plog(f"  After description filler: {len(relevant)} still relevant")
 
     # Export full Excel sheet

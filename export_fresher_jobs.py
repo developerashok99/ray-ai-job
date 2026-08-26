@@ -14,9 +14,7 @@ Output: fresher_jobs_share.xlsx
 """
 import os
 import re
-import sqlite3
 import sys
-from datetime import datetime, timedelta
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -27,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agent.exp_filter import (
     has_experience_requirement, SENIOR_TITLE_RE, IRRELEVANT_TITLE_RE, _EXP_FLOOR, _YRS,
 )
+from storage.database import get_relevant_jobs_since
 
 # ── Filters — imported from agent/exp_filter.py, the single source of truth ────
 SENIOR_RE     = SENIOR_TITLE_RE
@@ -37,20 +36,7 @@ EXP_FIELD_RE = re.compile(
 
 
 def export(days=7, output="fresher_jobs_share.xlsx"):
-    cutoff = (datetime.today() - timedelta(days=days)).strftime("%Y-%m-%d")
-
-    conn = sqlite3.connect("jobs.db")
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute("""
-        SELECT title, company, location, job_url, relevance_score,
-               hr_email, hr_email_2, hr_email_3, phone, date_posted,
-               experience_required, description
-        FROM jobs
-        WHERE relevance_score >= 7
-          AND (date_posted IS NULL OR date_posted = 'nan' OR date_posted >= ?)
-        ORDER BY date_posted DESC, relevance_score DESC
-    """, (cutoff,)).fetchall()
-    conn.close()
+    rows = get_relevant_jobs_since(min_score=7, days=days)
 
     filtered = []
     stats = dict(senior=0, irrelevant=0, exp_field=0, exp_desc=0)

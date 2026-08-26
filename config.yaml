@@ -33,7 +33,7 @@ scraping:
   delay_between_requests: 3
 
 storage:
-  db_path: "jobs.db"
+  mongo_db_name: "jobpilot"
   excel_path: "jobs_output.xlsx"
 
 resume:

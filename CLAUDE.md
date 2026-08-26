@@ -7,18 +7,19 @@ Target roles: broad finance/accounting scope (Equity Research, Investment/Financ
 Email: aditiraycapital@gmail.com — notification emails are sent here (see `notify.recipient_email` in config.yaml).
 
 ## What this project does
-Autonomous job scraping and matching pipeline for FINANCE roles (not tech/dev). Runs every hour,
+Autonomous job scraping and matching pipeline for FINANCE roles (not tech/dev). Runs every 2 hours,
 scrapes job boards, scores each job with Gemini AI against whatever resume is loaded at
 `resume/resume.pdf` (the scoring prompt injects the actual resume text — it's not hardcoded to one
 candidate's bio, so swapping the resume file re-targets the whole pipeline), stores matches in
-SQLite, exports to Excel, and sends a notification email with the best jobs.
+MongoDB Atlas, exports to Excel, and sends a notification email with the best jobs — never
+re-sending a posting that's already been emailed, even if a different source scrapes it again later.
 
 ---
 
 ## Architecture overview
 
 ```
-scheduler.py          — APScheduler BlockingScheduler, runs run_pipeline() every 1 hour
+scheduler.py          — APScheduler BlockingScheduler, runs run_pipeline() every 2 hours
   └─ scrapers/        — 4 sources, all run in parallel via ThreadPoolExecutor
   └─ agent/
        resume_matcher.py   — 3-pass scorer: pre-filter → cache → batch Gemini AI
@@ -27,7 +28,7 @@ scheduler.py          — APScheduler BlockingScheduler, runs run_pipeline() eve
        email_drafter.py    — template-based cold email (no LLM)
        notify_email.py     — Gmail SMTP notification with Excel attachment
   └─ storage/
-       database.py         — SQLite CRUD (jobs.db)
+       database.py         — MongoDB Atlas CRUD + dedup + company analytics (see below)
        excel_export.py     — openpyxl export with 3 sheets
   └─ monitor.py        — health checker (run separately, every 30 min)
 ```
@@ -38,16 +39,18 @@ scheduler.py          — APScheduler BlockingScheduler, runs run_pipeline() eve
 
 ```
 [1/4] Load resume + reset LLM fallback flags
-[2/4] Scrape 15 sources in parallel → dedup → drop stale (>14 days)
+[2/4] Scrape 4 sources in parallel → dedup → drop stale (>14 days)
 [3/4] Score — 3 passes:
         Pass 1: instant regex pre-filters (INTERNSHIP/SENIOR/IRRELEVANT/exp req/no-desc)
                 → score=1 inserted, score=5 for no-desc
-        Pass 2: DB cache (7-day lookback by title+company LOWER match)
+        Pass 2: DB cache (7-day lookback by title+company LOWER match, MongoDB)
         Pass 3: Gemini batch AI (5 jobs/call) → Groq fallback → Ollama fallback
                 → score=0 means AI failed — NOT inserted into DB
 [4/4] Description filler (fetch missing descs, batch re-score)
       → reload relevant[] from DB (filler may have downgraded some)
-      → export Excel → send Gmail notification
+      → drop jobs already emailed before under the same title+company (cross-run/
+        cross-source dedup — see storage/database.py was_recently_notified())
+      → export Excel → send Gmail notification → mark sent jobs as "emailed"
 ```
 
 ---
@@ -140,11 +143,36 @@ Removed: Groq email generation (dead code, never called).
 - Phase 2: batch AI re-score via `score_jobs_batch()`
 - Phase 3: write DB updates
 
-### storage/database.py
-- `insert_job(job)` — INSERT OR IGNORE (job_id unique constraint)
-- `delete_zero_score_jobs()` — DELETE WHERE relevance_score = 0
-- `get_relevant_jobs(min_score=7)` — ordered by days_old ASC, score DESC
-- `update_contact`, `update_draft_email` — still in schema but not called by pipeline
+### storage/database.py — MongoDB Atlas (pymongo), NOT SQLite
+Two collections: `jobs` (one doc per posting) and `companies` (aggregated per-company stats,
+built up automatically as jobs are inserted). Connection comes from `MONGODB_URI` in `.env`;
+DB name from `config.yaml` `storage.mongo_db_name` (default "jobpilot").
+
+Every job doc carries `title_key` / `company_key` (normalized, lowercased, whitespace-collapsed)
+so duplicate detection works across different job_ids/URLs/sources for the same real posting —
+not just exact job_id matches.
+
+- `init_db()` — ensures indexes (unique on job_id, compound on title_key+company_key, etc.)
+- `insert_job(job)` — inserts the job doc; returns False if job_id already exists. Also computes
+  `is_duplicate` / `duplicate_of` by checking title_key+company_key against all prior jobs, and
+  rolls the job into that company's `companies` doc (`_upsert_company`)
+- `was_recently_notified(title, company, days=14)` — True if a job with the same title+company was
+  already emailed recently (status="emailed") — used to skip re-sending the same posting
+- `mark_notified(job_ids)` — sets status="emailed" on the jobs actually included in a sent email
+- `check_score_cache(title, company, days=7)` — 7-day AI-score cache lookback (moved here from
+  resume_matcher.py so all DB access lives in one module)
+- `find_duplicate_groups(min_count=2)` — aggregation report: title+company groups seen 2+ times,
+  with their sources and job_ids — a direct answer to "which postings are duplicates"
+- `list_companies(min_jobs=1, limit=50)` — companies ranked by best score seen, then job count
+- `delete_zero_score_jobs()` — deletes jobs where relevance_score = 0
+- `get_relevant_jobs(min_score=7)`, `get_all_jobs()`, `list_jobs(...)`, `get_jobs_by_ids(...)` —
+  ordered by days_old ASC, score DESC (same contract as the old SQLite versions)
+- `get_jobs_missing_description`, `get_jobs_with_hr_email`, `get_relevant_jobs_since`,
+  `get_last_scraped_time`, `get_recent_high_score_jobs`, `get_score_distribution`, `get_db_stats`
+  — replace the raw SQL that used to live inline in description_filler.py/monitor.py/
+  export_fresher_jobs.py/push_all_drafts.py/test_5_drafts.py; those files now call these instead
+  of touching a database driver directly
+- `update_contact`, `update_draft_email` — still in schema but not called by the automated pipeline
 
 ### storage/excel_export.py
 - COLUMN_MAP maps DB field "source" → "Platform" header
@@ -183,12 +211,12 @@ matching:
   max_experience_years: 3   # drives the dynamic "too senior" ceiling in exp_filter.py + resume_matcher.py
 
 scraping:
-  interval_hours: 1
+  interval_hours: 2
   hours_old: 24
   delay_between_requests: 3
 
 storage:
-  db_path: "jobs.db"
+  mongo_db_name: "jobpilot"   # MongoDB Atlas database name (connection string in .env)
   excel_path: "jobs_output.xlsx"
 
 resume:
@@ -208,6 +236,7 @@ GROQ_API_KEY=...          # from console.groq.com
 GMAIL_ADDRESS=...         # Gmail account for sending
 GMAIL_APP_PASSWORD=...    # Gmail App Password (not regular password)
 OLLAMA_MODEL=qwen3:8b     # optional local model
+MONGODB_URI=...           # MongoDB Atlas connection string (mongodb+srv://user:pass@cluster...)
 ```
 
 ---
@@ -216,7 +245,7 @@ OLLAMA_MODEL=qwen3:8b     # optional local model
 
 1. **Never auto-send job application emails** — only notification emails to Aditi herself
 2. **Never commit or push to git unless Aditi explicitly asks**
-3. **Never print GROQ_API_KEY or GMAIL_APP_PASSWORD in output**
+3. **Never print GROQ_API_KEY, GMAIL_APP_PASSWORD, or MONGODB_URI in output** (the Mongo URI has the DB password embedded in it)
 4. **Never push --force to main**
 
 ---
@@ -224,7 +253,7 @@ OLLAMA_MODEL=qwen3:8b     # optional local model
 ## How to run
 
 ```bash
-# Start the pipeline scheduler (runs every 1 hour)
+# Start the pipeline scheduler (runs every 2 hours)
 python scheduler.py
 
 # Run monitor separately (checks every 30 min)
@@ -278,8 +307,33 @@ python -c "from storage.database import delete_zero_score_jobs; print(delete_zer
 
 - **Naukri**: may return 0 jobs if Cloudflare blocks the request — not a bug, just log it
 - **Gemini free tier**: gemini-2.5-flash works; gemini-2.0-flash has limit=0 on free tier
-- **Gemini quota**: free tier is ~1500 req/day. With batch scoring (5 jobs/call) and 1hr interval, quota lasts all day comfortably
+- **Gemini quota**: free tier is ~1500 req/day. With batch scoring (5 jobs/call) and a 2hr interval, quota lasts all day comfortably
 - **score=0**: means AI failed entirely (all 3 providers failed). These jobs are NOT in the DB.
+
+---
+
+## Database (SQLite → MongoDB Atlas migration)
+
+The old `jobs.db` SQLite file is gone entirely — every file that used to touch it directly
+(scheduler.py, monitor.py, description_filler.py, export_fresher_jobs.py, push_all_drafts.py,
+test_5_drafts.py, and the `.claude/commands/*.md` snippets) now goes through `storage/database.py`,
+which is 100% MongoDB. There is no SQLite fallback and no dual-write — do not reintroduce sqlite3
+imports anywhere in this project.
+
+**Duplicate detection** happens at two points:
+1. **At insert time** (`insert_job`) — every job is checked against ALL prior jobs by normalized
+   title+company and flagged `is_duplicate` / `duplicate_of`. This is a general "have we seen this
+   posting before" signal, stored for visibility/analytics — it does NOT block the insert.
+2. **Before sending the notification email** (`was_recently_notified`, checked in scheduler.py) —
+   a job is dropped from the email if a job with the same title+company was already marked
+   `status="emailed"` in the last 14 days, even if this run scraped it from a different source with
+   a different job_id/URL. After a successful send, `mark_notified()` sets that status on the jobs
+   that went out.
+
+**Companies collection** (new) — every insert also rolls into a per-company aggregate doc:
+first/last seen, best score ever seen, total postings seen, sources, locations, last 10 titles.
+`list_companies()` surfaces which companies are worth watching. `find_duplicate_groups()` gives a
+direct report of which (title, company) pairs have been scraped more than once and from where.
 
 ---
 

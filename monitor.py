@@ -8,7 +8,6 @@ Checks every 30 minutes:
 Writes monitor_log.txt with each check result.
 """
 import os
-import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -16,9 +15,11 @@ from datetime import datetime, timedelta
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agent.exp_filter import has_experience_requirement, find_experience_snippet, SENIOR_TITLE_RE
+from storage.database import (
+    get_last_scraped_time, get_recent_high_score_jobs, get_score_distribution, get_db_stats,
+)
 
 LOG_FILE  = "monitor_log.txt"
-DB_PATH   = "jobs.db"
 
 
 def _log(msg: str):
@@ -48,19 +49,7 @@ def _is_pipeline_running() -> bool:
 
 def _pipeline_last_job_time() -> datetime | None:
     """Return datetime of the most recently scraped job, or None."""
-    if not os.path.exists(DB_PATH):
-        return None
-    conn = sqlite3.connect(DB_PATH)
-    row = conn.execute(
-        "SELECT MAX(date_scraped) FROM jobs"
-    ).fetchone()
-    conn.close()
-    if row and row[0]:
-        try:
-            return datetime.fromisoformat(row[0])
-        except Exception:
-            return None
-    return None
+    return get_last_scraped_time()
 
 
 def _restart_pipeline():
@@ -83,32 +72,12 @@ def _check_db_quality() -> dict:
     Returns dict with findings.
     """
     issues = []
-    if not os.path.exists(DB_PATH):
-        return {"issues": ["DB file not found"], "total_checked": 0}
-
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-
-    # Find the most recent pipeline run's window: max(date_scraped) - 4 hours
-    last_scraped_raw = conn.execute("SELECT MAX(date_scraped) FROM jobs").fetchone()[0]
-    if not last_scraped_raw:
-        conn.close()
+    last_scraped = get_last_scraped_time()
+    if last_scraped is None:
         return {"issues": ["No jobs in DB"], "total_checked": 0}
-    try:
-        last_scraped = datetime.fromisoformat(last_scraped_raw)
-        run_start = (last_scraped - timedelta(hours=4)).isoformat()
-    except Exception:
-        run_start = (datetime.now() - timedelta(hours=6)).isoformat()
+    run_start = (last_scraped - timedelta(hours=4)).isoformat()
 
-    rows = conn.execute("""
-        SELECT job_id, title, company, relevance_score, description, experience_required
-        FROM jobs
-        WHERE relevance_score >= 7
-          AND date_scraped >= ?
-        ORDER BY date_scraped DESC
-        LIMIT 100
-    """, (run_start,)).fetchall()
-    conn.close()
+    rows = get_recent_high_score_jobs(min_score=7, since=run_start, limit=100)
 
     exp_slipped = []
     senior_slipped = []
@@ -146,45 +115,13 @@ def _check_db_quality() -> dict:
 # ── 3. Score distribution sanity check ───────────────────────────────────────
 
 def _check_score_distribution() -> dict:
-    if not os.path.exists(DB_PATH):
-        return {}
-    cutoff = (datetime.today() - timedelta(days=3)).strftime("%Y-%m-%d")
-    conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("""
-        SELECT relevance_score, COUNT(*) as cnt
-        FROM jobs
-        WHERE date_scraped >= ?
-        GROUP BY relevance_score
-        ORDER BY relevance_score DESC
-    """, ((datetime.today() - timedelta(days=3)).isoformat(),)).fetchall()
-    conn.close()
-    dist = {str(r[0]): r[1] for r in rows}
-    total = sum(dist.values())
-    high  = sum(v for k, v in dist.items() if int(k or 0) >= 7)
-    pct   = round(100 * high / total, 1) if total else 0
-    return {"distribution": dist, "total": total, "high_score_pct": pct}
+    return get_score_distribution(since_days=3)
 
 
 # ── 4. Recent DB stats ────────────────────────────────────────────────────────
 
 def _db_stats() -> dict:
-    if not os.path.exists(DB_PATH):
-        return {}
-    conn = sqlite3.connect(DB_PATH)
-    total     = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
-    today_cut = datetime.today().strftime("%Y-%m-%d")
-    new_today = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE date_scraped >= ?", (today_cut,)
-    ).fetchone()[0]
-    with_email = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE hr_email IS NOT NULL AND hr_email != ''"
-    ).fetchone()[0]
-    no_desc = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE (description IS NULL OR description IN ('nan','None','')) AND relevance_score >= 7"
-    ).fetchone()[0]
-    conn.close()
-    return {"total": total, "new_today": new_today,
-            "with_email": with_email, "no_description_matched": no_desc}
+    return get_db_stats()
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
