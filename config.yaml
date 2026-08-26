@@ -1,0 +1,43 @@
+search:
+  keywords:
+    - "Equity Research Analyst"
+    - "Investment Analyst"
+    - "Financial Analyst"
+    - "Research Analyst Finance"
+    - "Accountant"
+    - "Finance Executive"
+    - "Credit Analyst"
+    - "FPA Analyst"
+    - "Portfolio Analyst"
+    - "Financial Research Analyst"
+    - "Junior Finance Analyst"
+    - "Investment Research Analyst"
+  locations:
+    - "Hyderabad"
+    - "Bangalore"
+    - "Visakhapatnam"
+  experience_range: "1-3"
+  results_per_keyword: 40
+
+matching:
+  relevance_threshold: 7
+  gemini_model: "gemini-2.5-flash"
+  groq_model: "llama-3.1-8b-instant"
+  ollama_model: "qwen3:8b"
+  use_ollama: false
+  max_experience_years: 3
+
+scraping:
+  interval_hours: 2
+  hours_old: 24
+  delay_between_requests: 3
+
+storage:
+  db_path: "jobs.db"
+  excel_path: "jobs_output.xlsx"
+
+resume:
+  path: "resume/resume.pdf"
+
+notify:
+  recipient_email: "aditiraycapital@gmail.com"

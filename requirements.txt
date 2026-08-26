@@ -1,0 +1,11 @@
+python-jobspy
+beautifulsoup4
+groq
+python-dotenv
+pandas
+openpyxl
+apscheduler
+pyyaml
+requests
+lxml
+pdfplumber
