@@ -7,7 +7,8 @@ on:
 
 jobs:
   run-pipeline:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04   # ubuntu-latest (24.04)'s newer OpenSSL has known TLS handshake
+                            # issues connecting to some MongoDB Atlas clusters
     timeout-minutes: 20
 
     steps:
