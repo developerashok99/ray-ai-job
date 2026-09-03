@@ -1,5 +1,4 @@
 .env
-resume/resume.pdf
 __pycache__/
 *.pyc
 *.db
