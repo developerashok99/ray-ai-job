@@ -248,6 +248,9 @@ def get_jobs_missing_description(min_score=7, limit=50) -> list:
         "relevance_score": {"$gte": min_score},
         "description": {"$in": [None, "", "nan", "None"]},
         "job_url": {"$nin": [None, ""]},
+        # Foundit's job pages 403 every fetch attempt (Akamai bot-protection) — confirmed
+        # dead end, so don't waste a run's time and rate-limit budget retrying them.
+        "source": {"$ne": "foundit"},
     }, {"job_id": 1, "title": 1, "company": 1, "job_url": 1, "source": 1, "relevance_score": 1}) \
         .sort([("relevance_score", DESCENDING), ("date_scraped", DESCENDING)]).limit(limit)
     return [_strip_id(d) for d in docs]
