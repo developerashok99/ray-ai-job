@@ -22,7 +22,7 @@ search:
 matching:
   relevance_threshold: 7
   gemini_model: "gemini-2.5-flash"
-  groq_model: "llama-3.1-8b-instant"
+  groq_model: "openai/gpt-oss-120b"
   ollama_model: "qwen3:8b"
   use_ollama: false
   max_experience_years: 3
