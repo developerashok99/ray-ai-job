@@ -139,7 +139,10 @@ Removed: Groq email generation (dead code, never called).
 
 ### agent/description_filler.py
 - `run_filler(limit=50, rescore=True, dry_run=False)`
-- Phase 1: fetch descriptions with 2–4s delays (rate limit)
+- Pulls jobs via `get_jobs_missing_description(min_score=5, ...)` — deliberately 5, not 7, so it
+  catches BOTH the score=5 "no description, never AI-scored" holdouts from Pass 1 AND genuine 7+
+  matches missing a description. Score=1 pre-filter rejects never reach 5, so they're excluded.
+- Phase 1: fetch descriptions with 2–4s delays (rate limit); Foundit uses Playwright (JS-rendered)
 - Phase 2: batch AI re-score via `score_jobs_batch()`
 - Phase 3: write DB updates
 
@@ -291,8 +294,13 @@ python -c "from storage.database import delete_zero_score_jobs; print(delete_zer
   `wellfound.py`, `remoteok.py`, `remotive.py`, `jobicy.py`, `workingnomads.py`, `internshala.py`,
   `hackernews.py`, `shine.py`, `freshersworld.py`, `arbeitnow.py` — structurally tech/startup/
   internship-only, couldn't be re-tuned for finance via config alone
-- **`playwright` / `playwright-stealth`** — removed from requirements.txt, only used by the deleted
-  browser-based scrapers (Wellfound/Cutshort/Freshersworld); no active scraper needs a browser
+- **`playwright` / `playwright-stealth`** — removed from requirements.txt, not needed by any active
+  scraper. `agent/description_filler.py` still has a Playwright-based path for Foundit's JS-rendered
+  job pages, but it's moot in practice: Foundit's Akamai bot-protection returns a hard 403 "Access
+  Denied" to headless-browser requests, so that path never actually succeeds. Do not try to work
+  around it (stealth plugins, proxies, etc.) — that's the site's explicit anti-automation control
+  working as intended, not a bug. Foundit's ~183 "no description" holdouts stay permanently
+  unscoreable via description-fetching; see "Known issues" below.
 - **Kumar's old resume.tex + contact_finder.py + test_contact_finder.py** — leftover from the prior
   tech-recruiting profile, unused and deleted
 - **Hardcoded `_RULES` scoring constant** — replaced with `_build_rules()`, which reads the actual
@@ -306,9 +314,18 @@ python -c "from storage.database import delete_zero_score_jobs; print(delete_zer
 ## Known issues / things to watch
 
 - **Naukri**: may return 0 jobs if Cloudflare blocks the request — not a bug, just log it
+- **Foundit descriptions**: Foundit's scraper only returns metadata (no description), and its job
+  detail pages are behind Akamai bot-protection that 403s headless-browser fetch attempts — so
+  these postings permanently sit at score=5 "no description," unscoreable by AI. This is Foundit
+  actively blocking automation, not a bug to fix by trying harder. In practice this makes Foundit
+  the weakest of the 4 active sources — its title/company/location alone still feed the title-based
+  pre-filters (senior/internship/irrelevant), just never reach real AI scoring.
 - **Gemini free tier**: gemini-2.5-flash works; gemini-2.0-flash has limit=0 on free tier
 - **Gemini quota**: free tier is ~1500 req/day. With batch scoring (5 jobs/call) and a 2hr interval, quota lasts all day comfortably
 - **score=0**: means AI failed entirely (all 3 providers failed). These jobs are NOT in the DB.
+- **groq_model**: Groq periodically retires models outright (404, not deprecation warnings) — if
+  scoring starts failing with "model ... does not exist," check `GET api.groq.com/openai/v1/models`
+  for the current active list and update `config.yaml` `matching.groq_model`.
 
 ---
 

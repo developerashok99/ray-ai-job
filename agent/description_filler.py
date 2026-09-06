@@ -1,16 +1,27 @@
 """
-Description filler — fetches missing job descriptions for matched jobs in DB.
+Description filler — fetches missing job descriptions and gets them a real AI score.
 
-Why: When linkedin_fetch_description was False (early runs), jobs were stored
-with description=None. Without a description the LLM can't check experience
-requirements, so many over-qualified (5+yr) jobs slipped in with high scores.
+Covers two buckets, both identified by get_jobs_missing_description(min_score=5):
+  - score=5 "no description — verify manually" holdouts from Pass 1 (scheduler.py) —
+    these never got a real AI opinion at all, because there was no description to
+    score against at scrape time
+  - score>=7 matches whose description happened to be missing when first scored
+    (rarer edge case) — re-checked in case a full description reveals a hidden
+    experience requirement that should downgrade them
 
 This script:
-  1. Finds all matched (score >= 7) jobs with no description
+  1. Finds jobs in either bucket with no description
   2. Fetches the description from the job_url using requests + BeautifulSoup
   3. Re-scores each job with Groq using the full description
   4. Updates the DB — if new score < threshold, marks it appropriately
   5. Rebuilds the matched-jobs export at the end
+
+Foundit is a lost cause for this: its job pages sit behind Akamai bot-protection that
+returns a hard 403 to any headless-browser request, so `_fetch_description_playwright`
+below never actually succeeds against it in practice (confirmed against live Foundit
+URLs). It's left in place since it's harmless (fails closed, no crash) and costs nothing
+extra to keep, but don't expect it to work, and don't try to make it work by evading the
+block — that's Foundit's explicit anti-automation control, not a bug to route around.
 
 Safe to run concurrently with the scheduler (reads/writes different columns).
 """
@@ -145,7 +156,11 @@ def run_filler(limit: int = 50, rescore: bool = True, dry_run: bool = False):
     config    = _load_config()
     threshold = config["matching"]["relevance_threshold"]
 
-    rows = get_jobs_missing_description(min_score=7, limit=limit)
+    # min_score=5 catches both the "no description, never AI-scored" holdouts
+    # (Pass 1 parks those at exactly 5) and genuine 7+ matches missing a description.
+    # Score=1 pre-filter rejects (senior/internship/irrelevant/5+yrs) are correctly
+    # excluded since they never reach 5.
+    rows = get_jobs_missing_description(min_score=5, limit=limit)
 
     if not rows:
         print("[DescFiller] No no-description matched jobs found.")
