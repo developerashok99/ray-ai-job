@@ -21,6 +21,7 @@ def run_pipeline():
     from scrapers.foundit         import scrape_foundit
     from scrapers.timesjobs       import scrape_timesjobs
     from scrapers.naukri          import scrape_naukri
+    from scrapers.efinancialcareers import scrape_efinancialcareers
     from agent.resume_matcher import score_jobs_batch, load_resume, reset_llm_state
     from storage.database     import (
         init_db, job_exists, insert_job, get_relevant_jobs, get_jobs_by_ids,
@@ -69,9 +70,10 @@ def run_pipeline():
 
     sources = [
         ("LinkedIn/Indeed/Google", scrape_linkedin_indeed),
-        ("Foundit",        scrape_foundit),
-        ("TimesJobs",      scrape_timesjobs),
-        ("Naukri",         scrape_naukri),
+        ("Foundit",           scrape_foundit),
+        ("TimesJobs",         scrape_timesjobs),
+        ("Naukri",            scrape_naukri),
+        ("eFinancialCareers", scrape_efinancialcareers),
     ]
 
     from concurrent.futures import ThreadPoolExecutor
@@ -241,16 +243,21 @@ def run_pipeline():
     _plog(f"  Pre-filtered: {pre_filtered} | Cache: {cache_hits} | AI-scored: {len(still_needs_ai)}")
     _plog(f"  Relevant (score >= {threshold}): {len(relevant)}")
 
-    # 4. Description filler — catch hidden exp requirements before emailing
+    # 4. Description filler — catch hidden exp requirements before emailing, and pick up
+    # any score=5 "no description" holdout that gets a real, qualifying score here for
+    # the first time (it won't be "new" to any future run once it's in the DB, and it
+    # wasn't in this run's original relevant[] either — this is its only chance to be sent)
+    filler_touched_ids = []
     try:
         from agent.description_filler import run_filler
         _plog(f"\n[4/4] Auto-filling descriptions for no-desc matched jobs...")
-        run_filler(limit=40, rescore=True)
+        filler_touched_ids = run_filler(limit=40, rescore=True) or []
     except Exception as e:
         print(f"[!] Description filler error: {e}")
 
-    # Reload relevant from DB — filler may have downgraded some jobs
-    _rel_ids = [j["job_id"] for j in relevant]
+    # Reload from DB — filler may have downgraded originally-relevant jobs, or newly
+    # qualified some of the ones it just touched. Re-check both sets against the threshold.
+    _rel_ids = list({j["job_id"] for j in relevant} | set(filler_touched_ids))
     if _rel_ids:
         relevant = get_jobs_by_ids(_rel_ids, min_score=threshold)
     _plog(f"  After description filler: {len(relevant)} still relevant")

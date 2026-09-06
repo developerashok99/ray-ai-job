@@ -12,10 +12,19 @@ search:
     - "Financial Research Analyst"
     - "Junior Finance Analyst"
     - "Investment Research Analyst"
+    - "Buy Side Analyst"
+    - "Sell Side Analyst"
+    - "Fixed Income Analyst"
+    - "Fundamental Research Analyst"
+    - "Company Research Analyst"
+    - "Sector Research Analyst"
+    - "Investment Research Associate"
+    - "Business Research Analyst"
   locations:
-    - "Hyderabad"
     - "Bangalore"
+    - "Hyderabad"
     - "Visakhapatnam"
+    - "Delhi"
   experience_range: "1-3"
   results_per_keyword: 40
 

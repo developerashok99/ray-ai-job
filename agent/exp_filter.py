@@ -48,10 +48,9 @@ def _read_max_experience_years(default=3):
         return default
 
 
-# "Too senior" floor = candidate's own max years (from config) + a 2yr cushion.
-# Jobs requiring up to that many years are left alone — only genuinely
-# over-qualified requirements get pre-filtered out before the AI even runs.
-_EXP_FLOOR = _read_max_experience_years() + 2
+# "Too senior" floor: reject anything requiring MORE than max_experience_years — e.g.
+# max_experience_years=3 means 3 is fine, 4+ is rejected before the AI even runs.
+_EXP_FLOOR = _read_max_experience_years() + 1
 _YRS = "|".join(str(n) for n in range(_EXP_FLOOR, 21))
 
 # An explicit range like "3 to 6 years" or "3-6 yrs" — matched FIRST and separately,

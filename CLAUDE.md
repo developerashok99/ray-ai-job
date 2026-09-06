@@ -3,7 +3,7 @@
 ## Who is the user
 Aditi Kumari Ray — Aspiring Equity Research Analyst based in Delhi, India.
 2.8 yrs experience as a Financial Advisor at Religare Broking Limited (HNI equity/derivatives trading & advisory, ~Rs30cr AUM). CFA Level I cleared, Level II candidate (appeared Aug 2026), NISM Series VIII, B.Com + PGDIBO.
-Target roles: broad finance/accounting scope (Equity Research, Investment/Financial Analyst, Accountant, Finance Executive, Credit Analyst, FP&A Analyst, etc.), 1–3 yrs experience, location priority Hyderabad > Bangalore > Visakhapatnam.
+Target roles: broad finance/accounting scope (Equity Research, Investment/Financial Analyst, Accountant, Finance Executive, Credit Analyst, FP&A Analyst, Buy/Sell Side Analyst, etc.), 1–3 yrs experience (hard reject above 3), location priority Bangalore > Hyderabad > Visakhapatnam > Delhi.
 Email: aditiraycapital@gmail.com — notification emails are sent here (see `notify.recipient_email` in config.yaml).
 
 ## What this project does
@@ -21,10 +21,11 @@ re-sending a posting that's already been emailed, even if a different source scr
 ```
 scheduler.py          — run_pipeline() triggered every 30 min by GitHub Actions cron (or by
                         APScheduler's BlockingScheduler if running scheduler.py locally instead)
-  └─ scrapers/        — 4 sources, all run in parallel via ThreadPoolExecutor; the LinkedIn/
-                        Indeed/Google one ALSO parallelizes its own 36 keyword×location
-                        searches internally (6 workers) — sequential took 10+ min alone,
-                        which would have blown past a 30-min cadence on its own
+  └─ scrapers/        — 5 sources, all run in parallel via ThreadPoolExecutor; the LinkedIn/
+                        Indeed/Google one AND efinancialcareers.com ALSO parallelize their own
+                        keyword×location searches internally (6 workers each) — sequential took
+                        10+ min alone for just one of them, which would have blown past a
+                        30-min cadence on its own
   └─ agent/
        resume_matcher.py   — 3-pass scorer: pre-filter → cache → batch AI (Groq → Gemini → Ollama)
        exp_filter.py       — shared regex filters (INTERNSHIP/SENIOR/IRRELEVANT_TITLE_RE)
@@ -43,7 +44,7 @@ scheduler.py          — run_pipeline() triggered every 30 min by GitHub Action
 
 ```
 [1/4] Load resume + reset LLM fallback flags
-[2/4] Scrape 4 sources in parallel → dedup → drop stale (>14 days)
+[2/4] Scrape 5 sources in parallel → dedup → drop stale (>14 days)
 [3/4] Score — 3 passes:
         Pass 1: instant regex pre-filters (INTERNSHIP/SENIOR/IRRELEVANT/exp req/no-desc)
                 → score=1 inserted, score=5 for no-desc
@@ -59,17 +60,20 @@ scheduler.py          — run_pipeline() triggered every 30 min by GitHub Action
 
 ---
 
-## Active scrapers (4 total, all parallel)
+## Active scrapers (5 total, all parallel)
 
 | Source | Type | Notes |
 |---|---|---|
-| LinkedIn/Indeed/Google | jobspy library | 12 keywords × 3 locations × 40 results |
-| Foundit | requests (JSON API) | Indian job board |
+| LinkedIn/Indeed/Google | jobspy library | 20 keywords × 4 locations × 40 results, internally parallel (6 workers) |
+| eFinancialCareers | requests+BS4, internally parallel (6 workers) | Finance-industry-specific board; server-rendered (Angular SSR), no login wall, no Cloudflare/Akamai — the one genuinely new source added after evaluating iimjobs (login-gated SPA, skip) and Instahyre (mostly tech, skip) |
+| Foundit | requests (JSON API) | Indian job board — descriptions unreachable (Akamai 403s every fetch), see Known Issues |
 | TimesJobs | requests+BS4 | Indian job board |
-| Naukri | requests+BS4 | India #1 board (may hit Cloudflare) |
+| Naukri | requests+BS4 | Blocked (Cloudflare on the custom scraper, reCAPTCHA via jobspy's built-in Naukri too — both confirmed dead ends, kept anyway since harmless at 0 results) |
 
-All four read `search.keywords` / `search.locations` from config.yaml directly — no per-scraper
+All five read `search.keywords` / `search.locations` from config.yaml directly — no per-scraper
 hardcoded search terms — so re-tuning config.yaml is enough to redirect the whole search.
+jobspy also supports Glassdoor/ZipRecruiter/Bayt natively — Glassdoor was tried and tested dead
+(400 "location not parsed" regardless of format, likely tightened anti-scraping); not added.
 
 **Deleted entirely** (were tech-only by internal design, not just config — could not be re-tuned
 for finance without rewriting each one from scratch): `scrapers/hirist.py`, `cutshort.py`,
@@ -93,8 +97,10 @@ Fallback chain resets at the start of each pipeline run.
 Scoring rules are built dynamically by `resume_matcher.py` `_build_rules()` — NOT a hardcoded bio.
 It injects the actual text of whichever resume is loaded (`resume/resume.pdf`) into the AI prompt,
 so the LLM compares each job against the real resume rather than a fixed candidate description.
-The experience "too senior" ceiling is also dynamic: `config.matching.max_experience_years + 2`
-(currently 3+2=5yrs for Aditi's profile) — change `max_experience_years` in config.yaml, not code.
+The experience "too senior" ceiling is also dynamic: `config.matching.max_experience_years + 1`
+(currently 3+1=4yrs — i.e. reject anything requiring MORE than 3 years) — change
+`max_experience_years` in config.yaml, not code. `agent/exp_filter.py`'s `_EXP_FLOOR` uses the
+exact same `+1` formula so the regex pre-filter and the AI's own ceiling judgment always agree.
 
 - 9–10: role's title/function closely matches the loaded resume's target role/level, full-time permanent
 - 7–8: same finance function/domain as the resume, junior-mid level, exp requirement roughly matches
@@ -128,8 +134,8 @@ Single source of truth for all regex filters. Import from here — never redefin
   finance/accounting sub-functions (RM, credit, collections, payroll, tax, insurance) — those are
   left to the AI scorer to judge against whatever resume is loaded, since a different finance
   profile in the future might legitimately target one of them.
-- `_EXP_FLOOR` — dynamic "too senior" threshold = `config.matching.max_experience_years + 2`,
-  read from config.yaml at import time
+- `_EXP_FLOOR` — dynamic "too senior" threshold = `config.matching.max_experience_years + 1`,
+  read from config.yaml at import time (i.e. reject anything requiring MORE than max_experience_years)
 - `has_experience_requirement(desc)` — returns True if desc requires ≥ `_EXP_FLOOR` yrs min experience
 - `find_experience_snippet(desc)` — returns snippet around exp mention (used by monitor)
 
@@ -139,8 +145,12 @@ Removed: Groq email generation (dead code, never called).
 
 ### agent/notify_email.py
 - `send_report(jobs, recipient=None, tag="[APPLY NOW]")` — sends Gmail with Excel attachment
-- `_build_sheet(jobs, out_path)` — filters jobs through SENIOR/IRRELEVANT before writing sheet
-- Headers: #, Platform, Job Title, Company, Location, Score, Apply
+- `_build_sheet(jobs, out_path)` — filters jobs through SENIOR/IRRELEVANT before writing sheet,
+  then sorts by score desc → location-priority (from config's `search.locations` order, with
+  `_LOCATION_ALIASES` handling e.g. Bengaluru==Bangalore) → freshness desc (unknown dates last,
+  never dropped) — so the best/closest/freshest matches are at the top for fast applying
+- Headers: #, Platform, Job Title, Company, Location, Score, Posted, Apply — "Posted" is a
+  human label ("today" / "2 days ago" / "date unknown") built from `date_posted`
 
 ### agent/description_filler.py
 - `run_filler(limit=50, rescore=True, dry_run=False)`
@@ -209,9 +219,12 @@ not just exact job_id matches.
 
 ```yaml
 search:
-  keywords: 12 keywords (broad finance/accounting: Equity Research, Investment/Financial
-            Analyst, Accountant, Finance Executive, Credit Analyst, FP&A, etc.)
-  locations: Hyderabad, Bangalore, Visakhapatnam (priority order)
+  keywords: 20 keywords (broad finance/accounting + CFA/markets-specific: Equity Research,
+            Investment/Financial Analyst, Accountant, Finance Executive, Credit Analyst,
+            FP&A, Buy/Sell Side Analyst, Fixed Income Analyst, Sector/Company Research, etc.)
+  locations: Bangalore, Hyderabad, Visakhapatnam, Delhi (priority order — drives email/Excel
+            sort order via agent/notify_email.py, not scrape order; every combo is always
+            scraped regardless of list position)
   experience_range: "1-3"
   results_per_keyword: 40
 
@@ -305,6 +318,15 @@ python -c "from storage.database import delete_zero_score_jobs; print(delete_zer
   `wellfound.py`, `remoteok.py`, `remotive.py`, `jobicy.py`, `workingnomads.py`, `internshala.py`,
   `hackernews.py`, `shine.py`, `freshersworld.py`, `arbeitnow.py` — structurally tech/startup/
   internship-only, couldn't be re-tuned for finance via config alone
+- **jobspy's Naukri and Glassdoor support — tried live, not added**: `scrape_jobs(site_name=
+  ["naukri"])` returns a 406 reCAPTCHA wall; `site_name=["glassdoor"]` returns a 400 "location
+  not parsed" regardless of location format tried. Both confirmed dead via direct live calls
+  during this investigation, not assumed. Re-test before ever adding either back — a future
+  jobspy version might fix them, but as of this investigation they don't work.
+- **iimjobs.com and Instahyre — researched, not built**: iimjobs is a login-gated Angular SPA
+  with no public feed (job details require signup); Instahyre is confirmed mostly IT/software/
+  sales-tech with only a minor finance vertical. Neither worth the scraper-building effort for
+  this candidate's profile. (Monster India is not a separate source — it rebranded to Foundit.)
 - **`playwright` / `playwright-stealth`** — removed from requirements.txt, not needed by any active
   scraper. `agent/description_filler.py` still has a Playwright-based path for Foundit's JS-rendered
   job pages, but it's moot in practice: Foundit's Akamai bot-protection returns a hard 403 "Access
@@ -324,7 +346,15 @@ python -c "from storage.database import delete_zero_score_jobs; print(delete_zer
 
 ## Known issues / things to watch
 
-- **Naukri**: may return 0 jobs if Cloudflare blocks the request — not a bug, just log it
+- **Naukri**: both paths are confirmed dead ends, not intermittent — the custom scraper hits
+  Cloudflare, and jobspy's own built-in Naukri support (tried and rejected — see "What was
+  removed") hits a reCAPTCHA wall (406) instead. Kept the custom scraper anyway since it's
+  harmless at 0 results; don't spend more time trying to fix Naukri access.
+- **No applicant-count data exists anywhere** (confirmed by reading jobspy's actual model/schema
+  source — no such field, only an `easy_apply` search *filter*, not a returned count). "Apply
+  before N other applicants" is NOT literally achievable — it's approximated by speed (30-min
+  cadence) and the freshness sort/label in notify_email.py. Don't attempt to add this without
+  re-confirming the underlying data source has changed.
 - **Foundit descriptions**: Foundit's scraper only returns metadata (no description), and its job
   detail pages are behind Akamai bot-protection that 403s headless-browser fetch attempts — so
   these postings permanently sit at score=5 "no description," unscoreable by AI. This is Foundit

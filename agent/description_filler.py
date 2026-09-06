@@ -83,6 +83,8 @@ def _fetch_description(job_url: str, source: str) -> str:
             el = soup.select_one(".job-desc") or soup.select_one("[class*='jd-desc']")
         elif "internshala.com" in job_url:
             el = soup.select_one(".about_the_job") or soup.select_one("#about_company")
+        elif "efinancialcareers.com" in job_url:
+            el = soup.select_one(".job-description") or soup.select_one("[class*='job-description']")
         else:
             # Generic: find the largest text block
             el = None
@@ -144,7 +146,7 @@ def _fetch_description_playwright(job_url: str) -> str:
         return ""
 
 
-def run_filler(limit: int = 50, rescore: bool = True, dry_run: bool = False):
+def run_filler(limit: int = 50, rescore: bool = True, dry_run: bool = False) -> list:
     """
     Fetch descriptions and optionally re-score matched jobs with no description.
 
@@ -152,6 +154,12 @@ def run_filler(limit: int = 50, rescore: bool = True, dry_run: bool = False):
         limit:    Max jobs to process per run (keep low to avoid rate limits)
         rescore:  If True, batch re-score with AI after fetching descriptions
         dry_run:  If True, print results but don't update DB
+
+    Returns the job_ids actually updated — the caller (scheduler.py) needs this to catch
+    postings that started as a score=5 "no description" placeholder and got newly upgraded
+    to a real match here. Without it, a job like this would sit in the DB with a good score
+    but never appear in any notification, since it's not "new" to future runs and wasn't in
+    the current run's original relevant[] list either (confirmed missing from a real run).
     """
     config    = _load_config()
     threshold = config["matching"]["relevance_threshold"]
@@ -164,7 +172,7 @@ def run_filler(limit: int = 50, rescore: bool = True, dry_run: bool = False):
 
     if not rows:
         print("[DescFiller] No no-description matched jobs found.")
-        return
+        return []
 
     print(f"[DescFiller] Processing {len(rows)} no-description matched jobs...")
 
@@ -234,22 +242,29 @@ def run_filler(limit: int = 50, rescore: bool = True, dry_run: bool = False):
     # Phase 3: apply DB updates
     downgraded = 0
     enriched   = 0
+    upgraded   = 0
+    touched_ids = []
     for row, desc, new_score, reason in fetched:
         old_score = row["relevance_score"]
         job_id    = row["job_id"]
+        touched_ids.append(job_id)
 
         if not dry_run:
             update_job_description_and_score(job_id, desc, new_score, reason)
 
         if new_score < threshold and old_score >= threshold:
             downgraded += 1
+        elif new_score >= threshold and old_score < threshold:
+            upgraded += 1
         enriched += 1
 
-    print(f"\n[DescFiller] Done — enriched: {enriched}, downgraded: {downgraded}")
+    print(f"\n[DescFiller] Done — enriched: {enriched}, downgraded: {downgraded}, newly upgraded: {upgraded}")
     if downgraded > 0 and not dry_run:
         print("[DescFiller] Rebuilding matched-jobs export...")
         from export_fresher_jobs import export
         export()
+
+    return touched_ids
 
 
 if __name__ == "__main__":

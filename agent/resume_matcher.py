@@ -45,12 +45,12 @@ def load_resume(path=None):
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
 def _experience_ceiling():
-    """Years above which a job is 'too senior' — candidate's own max + a 2yr cushion."""
+    """Years above which a job is 'too senior' — anything more than max_experience_years."""
     try:
         max_years = int(_get_config().get("matching", {}).get("max_experience_years", 3))
     except Exception:
         max_years = 3
-    return max_years + 2
+    return max_years + 1
 
 
 def _build_rules():
