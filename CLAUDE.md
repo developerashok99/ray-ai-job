@@ -79,9 +79,10 @@ tech-role scraping ever comes back, these would need to be rewritten, not restor
 
 ## AI scoring
 
-**Primary:** Gemini 2.5 Flash (free tier)
-**Secondary fallback:** Groq llama-3.1-8b-instant
-**Tertiary fallback:** Ollama qwen3:8b (local, disabled by default)
+**Primary:** Groq `openai/gpt-oss-120b` (free tier, ~14,400 req/day)
+**Secondary fallback:** Gemini `gemini-3.6-flash` (free tier, ~1,500 req/day)
+**Tertiary fallback:** Ollama qwen3:8b (local — not available in GitHub Actions or this sandbox;
+  effectively a dead end if both cloud providers fail, since there's no server for it to reach)
 
 Fallback chain resets at the start of each pipeline run.
 
@@ -207,8 +208,8 @@ search:
 
 matching:
   relevance_threshold: 7
-  gemini_model: "gemini-2.5-flash"
-  groq_model: "llama-3.1-8b-instant"
+  gemini_model: "gemini-3.6-flash"
+  groq_model: "openai/gpt-oss-120b"
   ollama_model: "qwen3:8b"
   use_ollama: false
   max_experience_years: 3   # drives the dynamic "too senior" ceiling in exp_filter.py + resume_matcher.py
@@ -234,7 +235,7 @@ notify:
 ## Environment (.env) — NEVER print or commit these values
 
 ```
-GEMINI_API_KEY=...        # from aistudio.google.com — must start with AIzaSy
+GEMINI_API_KEY=...        # from aistudio.google.com — format varies, see "Known issues" below
 GROQ_API_KEY=...          # from console.groq.com
 GMAIL_ADDRESS=...         # Gmail account for sending
 GMAIL_APP_PASSWORD=...    # Gmail App Password (not regular password)
@@ -320,12 +321,19 @@ python -c "from storage.database import delete_zero_score_jobs; print(delete_zer
   actively blocking automation, not a bug to fix by trying harder. In practice this makes Foundit
   the weakest of the 4 active sources — its title/company/location alone still feed the title-based
   pre-filters (senior/internship/irrelevant), just never reach real AI scoring.
-- **Gemini free tier**: gemini-2.5-flash works; gemini-2.0-flash has limit=0 on free tier
 - **Gemini quota**: free tier is ~1500 req/day. With batch scoring (5 jobs/call) and a 2hr interval, quota lasts all day comfortably
 - **score=0**: means AI failed entirely (all 3 providers failed). These jobs are NOT in the DB.
-- **groq_model**: Groq periodically retires models outright (404, not deprecation warnings) — if
-  scoring starts failing with "model ... does not exist," check `GET api.groq.com/openai/v1/models`
-  for the current active list and update `config.yaml` `matching.groq_model`.
+- **Model names go stale**: both Groq and Google periodically retire model names outright (404 "no
+  longer available"), not just deprecation warnings — this has already happened once to each
+  provider (`llama-3.1-8b-instant` on Groq, `gemini-2.5-flash` on Google). If scoring starts failing
+  with a 404/"model does not exist" error, that's the cause, not a code bug. Check
+  `GET api.groq.com/openai/v1/models` (needs `Authorization: Bearer $GROQ_API_KEY`) for Groq's
+  current active list; Google's 404 error body directly names the replacement model to use. Update
+  `config.yaml` `matching.groq_model` / `gemini_model` accordingly.
+- **GEMINI_API_KEY format**: the working key for this project does NOT look like the classic
+  `AIzaSy...` AI-Studio format documented elsewhere — it's a different-looking string
+  (`AQ.Ab8...`) and still authenticates fine against the same `generativelanguage.googleapis.com`
+  endpoint. Don't assume a key is invalid just because it doesn't match the `AIzaSy` pattern.
 
 ---
 

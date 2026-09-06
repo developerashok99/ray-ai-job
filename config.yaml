@@ -21,7 +21,7 @@ search:
 
 matching:
   relevance_threshold: 7
-  gemini_model: "gemini-2.5-flash"
+  gemini_model: "gemini-3.6-flash"
   groq_model: "openai/gpt-oss-120b"
   ollama_model: "qwen3:8b"
   use_ollama: false
