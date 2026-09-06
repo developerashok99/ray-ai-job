@@ -2,14 +2,24 @@ name: JobPilot Pipeline
 
 on:
   schedule:
-    - cron: "0 */2 * * *"   # every 2 hours (GitHub may delay this slightly under load)
+    - cron: "*/30 * * * *"  # every 30 minutes (GitHub may delay this slightly under load)
   workflow_dispatch:        # lets you trigger a run manually from the Actions tab
+
+# Prevents two runs from ever executing at once. A full run can take close to the
+# 30-minute interval itself, so without this a slow run could overlap the next
+# scheduled trigger — both hitting MongoDB and the job sites at the same time,
+# risking duplicate/racy notification checks. With cancel-in-progress: false, an
+# overlapping trigger queues instead of running concurrently; if more than one
+# is queued, only the most recent supersedes the rest (self-correcting, no backlog).
+concurrency:
+  group: jobpilot-pipeline
+  cancel-in-progress: false
 
 jobs:
   run-pipeline:
     runs-on: ubuntu-22.04   # ubuntu-latest (24.04)'s newer OpenSSL has known TLS handshake
                             # issues connecting to some MongoDB Atlas clusters
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       - name: Checkout repo

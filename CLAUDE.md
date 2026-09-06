@@ -7,8 +7,8 @@ Target roles: broad finance/accounting scope (Equity Research, Investment/Financ
 Email: aditiraycapital@gmail.com — notification emails are sent here (see `notify.recipient_email` in config.yaml).
 
 ## What this project does
-Autonomous job scraping and matching pipeline for FINANCE roles (not tech/dev). Runs every 2 hours,
-scrapes job boards, scores each job with Gemini AI against whatever resume is loaded at
+Autonomous job scraping and matching pipeline for FINANCE roles (not tech/dev). Runs every 30
+minutes via GitHub Actions cron, scrapes job boards, scores each job with AI against whatever resume is loaded at
 `resume/resume.pdf` (the scoring prompt injects the actual resume text — it's not hardcoded to one
 candidate's bio, so swapping the resume file re-targets the whole pipeline), stores matches in
 MongoDB Atlas, exports to Excel, and sends a notification email with the best jobs — never
@@ -19,10 +19,14 @@ re-sending a posting that's already been emailed, even if a different source scr
 ## Architecture overview
 
 ```
-scheduler.py          — APScheduler BlockingScheduler, runs run_pipeline() every 2 hours
-  └─ scrapers/        — 4 sources, all run in parallel via ThreadPoolExecutor
+scheduler.py          — run_pipeline() triggered every 30 min by GitHub Actions cron (or by
+                        APScheduler's BlockingScheduler if running scheduler.py locally instead)
+  └─ scrapers/        — 4 sources, all run in parallel via ThreadPoolExecutor; the LinkedIn/
+                        Indeed/Google one ALSO parallelizes its own 36 keyword×location
+                        searches internally (6 workers) — sequential took 10+ min alone,
+                        which would have blown past a 30-min cadence on its own
   └─ agent/
-       resume_matcher.py   — 3-pass scorer: pre-filter → cache → batch Gemini AI
+       resume_matcher.py   — 3-pass scorer: pre-filter → cache → batch AI (Groq → Gemini → Ollama)
        exp_filter.py       — shared regex filters (INTERNSHIP/SENIOR/IRRELEVANT_TITLE_RE)
        description_filler.py — fetches missing descriptions, batch re-scores
        email_drafter.py    — template-based cold email (no LLM)
@@ -193,6 +197,11 @@ not just exact job_id matches.
 - Reads `interval_hours` from config.yaml for stale threshold (not hardcoded)
 - Uses SENIOR_TITLE_RE from exp_filter
 - "Quality: OK" only shown when total_checked > 0
+- Read-only diagnostics only — does NOT auto-restart anything. It used to spawn a local
+  `scheduler.py` subprocess when data looked stale; removed because that would race the real
+  GitHub Actions-driven pipeline on the same MongoDB, and would crash outright on non-Windows
+  anyway (`_is_pipeline_running`'s PowerShell call has no OS to run against on Linux/Mac —
+  now caught, so it just correctly reports False there instead of throwing)
 
 ---
 
@@ -215,7 +224,8 @@ matching:
   max_experience_years: 3   # drives the dynamic "too senior" ceiling in exp_filter.py + resume_matcher.py
 
 scraping:
-  interval_hours: 2
+  interval_hours: 0.5   # only the local scheduler.py loop — GitHub Actions cron is set
+                        # independently in .github/workflows/pipeline.yml
   hours_old: 24
   delay_between_requests: 3
 
@@ -257,7 +267,7 @@ MONGODB_URI=...           # MongoDB Atlas connection string (mongodb+srv://user:
 ## How to run
 
 ```bash
-# Start the pipeline scheduler (runs every 2 hours)
+# Start the pipeline scheduler (runs every 30 min; GitHub Actions is the real deployment though)
 python scheduler.py
 
 # Run monitor separately (checks every 30 min)
@@ -321,7 +331,10 @@ python -c "from storage.database import delete_zero_score_jobs; print(delete_zer
   actively blocking automation, not a bug to fix by trying harder. In practice this makes Foundit
   the weakest of the 4 active sources — its title/company/location alone still feed the title-based
   pre-filters (senior/internship/irrelevant), just never reach real AI scoring.
-- **Gemini quota**: free tier is ~1500 req/day. With batch scoring (5 jobs/call) and a 2hr interval, quota lasts all day comfortably
+- **Gemini quota**: free tier is ~1500 req/day. Fine under normal operation since Gemini is only the
+  fallback (Groq is primary) — but at a 30-min cadence (48 runs/day, 4x more than the old 2hr
+  interval), an extended Groq outage would burn through Gemini's daily quota noticeably faster than
+  it used to. Worth checking if scoring quality drops unexpectedly during a long Groq issue.
 - **score=0**: means AI failed entirely (all 3 providers failed). These jobs are NOT in the DB.
 - **Model names go stale**: both Groq and Google periodically retire model names outright (404 "no
   longer available"), not just deprecation warnings — this has already happened once to each

@@ -28,7 +28,8 @@ matching:
   max_experience_years: 3
 
 scraping:
-  interval_hours: 2
+  interval_hours: 0.5   # only drives the local scheduler.py/APScheduler loop — the GitHub
+                        # Actions cron schedule is set independently in the workflow file
   hours_old: 24
   delay_between_requests: 3
 

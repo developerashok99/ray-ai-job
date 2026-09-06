@@ -1,7 +1,11 @@
 """
-JobPilot AI — Autonomous Health Monitor
-Checks every 30 minutes:
-  1. Pipeline process alive → restart if dead
+JobPilot AI — Health Monitor (read-only diagnostics, run on demand via /check-monitor)
+
+Checks:
+  1. Data freshness — when did MongoDB last see a new job? Alerts (does NOT auto-restart
+     anything) if stale, since the real deployment is GitHub Actions cron now, not a
+     persistent local process — auto-spawning a competing local scheduler.py here would
+     race the real pipeline on the same MongoDB. If this alerts, check the Actions tab.
   2. DB quality — sample recent matched jobs for experience slippage
   3. Score distribution — flag if too many high scores (LLM being too generous)
   4. Log tail — look for repeated errors
@@ -31,16 +35,28 @@ def _log(msg: str):
 
 
 # ── 1. Process check ──────────────────────────────────────────────────────────
+#
+# Only meaningful if scheduler.py is being run as a persistent local process
+# (python scheduler.py). The real deployment is GitHub Actions cron now, which
+# runs the pipeline once per trigger in a fresh container and exits — there's
+# no persistent process to find there, so this will correctly report False in
+# that context. The real health signal in that model is _pipeline_last_job_time()
+# below (when did the last run actually write to MongoDB), not this check.
 
 def _is_pipeline_running() -> bool:
-    """Return True if scheduler.py is running as a Python process."""
-    result = subprocess.run(
-        ["powershell", "-Command",
-         "Get-CimInstance Win32_Process | "
-         "Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*scheduler.py*' } | "
-         "Measure-Object | Select-Object -ExpandProperty Count"],
-        capture_output=True, text=True
-    )
+    """Return True if scheduler.py is running as a local Python process (Windows only)."""
+    try:
+        result = subprocess.run(
+            ["powershell", "-Command",
+             "Get-CimInstance Win32_Process | "
+             "Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*scheduler.py*' } | "
+             "Measure-Object | Select-Object -ExpandProperty Count"],
+            capture_output=True, text=True,
+        )
+    except OSError:
+        # No PowerShell on this platform (Linux/Mac, or a GitHub Actions runner) —
+        # not an error, just means this particular check doesn't apply here.
+        return False
     try:
         return int(result.stdout.strip()) > 0
     except Exception:
@@ -50,16 +66,6 @@ def _is_pipeline_running() -> bool:
 def _pipeline_last_job_time() -> datetime | None:
     """Return datetime of the most recently scraped job, or None."""
     return get_last_scraped_time()
-
-
-def _restart_pipeline():
-    _log("  ACTION: Restarting pipeline (scheduler.py)...")
-    subprocess.Popen(
-        [sys.executable, "scheduler.py"],
-        cwd=os.path.dirname(os.path.abspath(__file__)),
-        creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
-    )
-    _log("  ACTION: Pipeline restart issued.")
 
 
 # ── 2. DB quality check ───────────────────────────────────────────────────────
@@ -152,8 +158,8 @@ def run_monitor():
     stale = (last_job_time is None or
              (datetime.now() - last_job_time).total_seconds() > stale_threshold)
     if not running and stale:
-        _log("  ALERT: Pipeline is DOWN and stale — restarting!")
-        _restart_pipeline()
+        _log("  ALERT: No new jobs scraped recently — check the GitHub Actions "
+             "'JobPilot Pipeline' workflow (Actions tab) for a failed/disabled run.")
     elif not running:
         _log("  Pipeline not running but jobs are fresh — pipeline just finished, OK.")
 
